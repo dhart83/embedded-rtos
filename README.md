@@ -8,19 +8,29 @@ The initial implementation targets the Nucleo-F411RE development board, which us
 
 ---
 
-## Current Milestone: GPIO Blink
+## Current Milestone: UART Echo
 
-The current verified milestone is bare-metal GPIO bring-up on the Nucleo-F411RE.
+The current verified milestone is polling USART2 transmit/receive bring-up on the Nucleo-F411RE through the ST-LINK virtual COM port.
 
 Implemented and verified:
 
 - Custom startup path from reset to `main()`
 - Linker script for STM32F411RE Flash/RAM layout
 - GPIOA peripheral clock enable through RCC
-- PA5 configured as a general-purpose output
-- Onboard LD2 LED toggled using direct register access
+- PA5/LD2 GPIO blink using direct register access
+- USART2 transmit over PA2 through ST-LINK VCP
+- USART2 receive over PA3 through ST-LINK VCP
+- Polling `TXE` before transmit writes
+- Polling `RXNE` before receive reads
+- Basic carriage-return handling for clean terminal output
+
+### GPIO Blink Demo
 
 ![GPIO blink demo](docs/media/01_blink.gif)
+
+### UART Echo Demo
+
+![UART echo demo](docs/media/02_uart_echo.gif)
 
 ---
 
@@ -35,8 +45,10 @@ embedded-rtos/
 ├── apps/
 │   ├── 00_bringup/
 │   │   └── main.c
-│   │
-│   └── 01_blink/
+│   ├── 01_blink/
+│   │   ├── main.c
+│   │   └── README.md
+│   └── 02_uart_echo/
 │       ├── main.c
 │       └── README.md
 │
@@ -47,7 +59,8 @@ embedded-rtos/
 │
 └── docs/
     └── media/
-        └── 01_blink.gif
+        ├── 01_blink.gif
+        └── 02_uart_echo.gif
 ```
 
 ---
@@ -58,6 +71,7 @@ embedded-rtos/
 |---|---|---|
 | `00_bringup` | Minimal reset-to-`main()` validation | Verified |
 | `01_blink` | Bare-metal GPIO blink on PA5/LD2 | Verified |
+| `02_uart_echo` | Polling USART2 TX/RX echo over ST-LINK VCP | Verified |
 
 ---
 
@@ -87,8 +101,6 @@ embedded-rtos/
 
 ## Verify Tool Installation
 
-Run:
-
 ```bash
 make --version
 arm-none-eabi-gcc --version
@@ -104,49 +116,30 @@ If using WSL2, confirm the ST-LINK appears inside WSL:
 lsusb
 ```
 
-Expected: a device from STMicroelectronics / ST-LINK should appear.
-
 ---
 
 ## Build
 
-Clone the repo:
-
 ```bash
 git clone https://github.com/dhart83/embedded-rtos.git
 cd embedded-rtos
-```
-
-Show available Make targets:
-
-```bash
 make help
-```
-
-Build the GPIO blink app:
-
-```bash
 make deepclean
-make APP=01_blink
+make APP=02_uart_echo
+make APP=02_uart_echo size
 ```
 
 Build output:
 
 ```text
-build/01_blink/01_blink.elf
-```
-
-Show size:
-
-```bash
-make APP=01_blink size
+build/02_uart_echo/02_uart_echo.elf
 ```
 
 Optional binary and HEX artifacts:
 
 ```bash
-make APP=01_blink bin
-make APP=01_blink hex
+make APP=02_uart_echo bin
+make APP=02_uart_echo hex
 ```
 
 ---
@@ -157,29 +150,20 @@ Without a board, you can still build and inspect the firmware image.
 
 ```bash
 make deepclean
-make APP=01_blink
-make APP=01_blink size
+make APP=02_uart_echo
+make APP=02_uart_echo size
 ```
 
 Inspect key symbols:
 
 ```bash
-arm-none-eabi-nm build/01_blink/01_blink.elf | grep -E "Reset_Handler|main|_estack|__isr_vector"
-```
-
-Expected symbols include:
-
-```text
-Reset_Handler
-main
-_estack
-__isr_vector
+arm-none-eabi-nm build/02_uart_echo/02_uart_echo.elf | grep -E "Reset_Handler|main|_estack|__isr_vector"
 ```
 
 Inspect sections:
 
 ```bash
-arm-none-eabi-objdump -h build/01_blink/01_blink.elf
+arm-none-eabi-objdump -h build/02_uart_echo/02_uart_echo.elf
 ```
 
 The vector table should be placed at the beginning of Flash:
@@ -194,12 +178,8 @@ This confirms the firmware image is structurally reasonable, but it does not pro
 
 ## Flash to Hardware
 
-Connect the Nucleo-F411RE board.
-
-Flash the GPIO blink app:
-
 ```bash
-make APP=01_blink flash
+make APP=02_uart_echo flash
 ```
 
 Expected OpenOCD output should include:
@@ -212,7 +192,39 @@ Verified OK
 Resetting Target
 ```
 
-After flashing, the onboard LD2 LED should blink.
+---
+
+## Test UART Echo
+
+Open the serial terminal:
+
+```bash
+picocom -b 115200 /dev/ttyACM0
+```
+
+Expected startup output:
+
+```text
+UART echo ready
+```
+
+Type characters in the terminal. Each keypress should be echoed back by the MCU.
+
+Terminal settings:
+
+```text
+Baud: 115200
+Data bits: 8
+Parity: None
+Stop bits: 1
+Flow control: None
+```
+
+Exit `picocom`:
+
+```text
+Ctrl-A, then Ctrl-X
+```
 
 ---
 
@@ -224,17 +236,10 @@ Terminal 1:
 make openocd
 ```
 
-Expected output should include:
-
-```text
-Cortex-M4 processor detected
-Listening on port 3333 for gdb connections
-```
-
 Terminal 2:
 
 ```bash
-make APP=01_blink debug
+make APP=02_uart_echo debug
 ```
 
 Inside GDB:
@@ -279,24 +284,22 @@ Then inside WSL:
 lsusb
 ```
 
-Once ST-LINK appears in WSL, OpenOCD should be able to connect.
-
 ---
 
 ## Current Make Targets
 
 ```text
-make                    Build default app ELF
-make APP=01_blink       Build selected app
-make APP=01_blink bin   Build binary artifact
-make APP=01_blink hex   Build Intel HEX artifact
-make APP=01_blink size  Show ELF size
-make APP=01_blink flash Flash ELF with OpenOCD
-make openocd            Start OpenOCD server
-make APP=01_blink debug Start GDB with ELF symbols
-make clean              Remove current app build output
-make deepclean          Remove full build directory
-make help               Show available targets
+make                         Build default app ELF
+make APP=02_uart_echo        Build selected app
+make APP=02_uart_echo bin    Build binary artifact
+make APP=02_uart_echo hex    Build Intel HEX artifact
+make APP=02_uart_echo size   Show ELF size
+make APP=02_uart_echo flash  Flash ELF with OpenOCD
+make openocd                 Start OpenOCD server
+make APP=02_uart_echo debug  Start GDB with ELF symbols
+make clean                   Remove current app build output
+make deepclean               Remove full build directory
+make help                    Show available targets
 ```
 
 ---
